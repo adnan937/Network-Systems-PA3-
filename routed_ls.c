@@ -1,3 +1,7 @@
+/* routed_LS.c */
+/* This is a link state routing program that uses TCP protocol */
+
+
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -100,7 +104,13 @@ int TCPconnect(int portNumber)
 }
 
 int main(int argc, char *argv[]) 
-{	
+{
+	/* check command line args. */
+	if(argc < 4){
+		printf("usage : %s <RouterID> <LogFileName> <Initialization file> \n", argv[0]);
+		exit(1);
+	}
+	
 	
 	printf("...\n"); 
 	if( TCPconnect(9602) < 0)
