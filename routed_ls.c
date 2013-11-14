@@ -1,123 +1,99 @@
-/* routed_LS.c */
-/* This is a link state routing program that uses TCP protocol */
 
 
-#include <sys/types.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <netdb.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <unistd.h>
-#include <string.h>   
-#include <sys/time.h> 
-#include <signal.h>
-#include <unistd.h>
-#define QUEUELENGTH 4 	
 
-int createTCPserverSocket(int portNumber)
-{
-	// could be something other than AF_INET
-	int socketId;
-	if((socketId = socket( PF_INET,SOCK_STREAM , IPPROTO_TCP)) < 0) 
-		printf("error creating server socket! \n"); 
-	
-	struct sockaddr_in servAddr; 
-	
-	servAddr.sin_family = AF_INET;
-	servAddr.sin_addr.s_addr = htonl(INADDR_ANY); 
-	servAddr.sin_port = htons(portNumber);
-	
-	
-	if(bind(socketId,(struct sockaddr *) &servAddr, sizeof(servAddr)) < 0)
-		printf("binding failed\n");
-	
-	
-	
-		
-	return socketId;
-}
+#include "router_init.h"
 
-void TCPlisten(int port)
-{
-		int servSock = createTCPserverSocket(port); 
-	
-		if( listen(servSock, QUEUELENGTH) < 0)
-			printf("listening error \n");	
-			
-		printf("listening...\n");
-		for(;;)
-		{
-			
-			struct sockaddr_in cliAddr; ;
-			int clientSock;
-			int cliLen = sizeof(cliAddr);
-		
-			if((clientSock = accept(servSock, (struct sockaddr *) &cliAddr, &cliLen)) < 0) 
-				printf("server accepting failed\n"); 
-				
-			char buffer[200]; 
-			bzero(buffer,sizeof(buffer));
-			
-			if( recvfrom(clientSock, &buffer, sizeof(buffer), 0, (struct sockaddr *) &cliAddr, &cliLen) == -1)
-				printf(" error with getting the file\n"); 
-				
-			printf("file received %s\n", buffer); 	
-			
-			//close(clientSock);
-		}
-	
-		 
-}
 
-int TCPconnect(int portNumber)
-{ 	
-	
-	printf("trying to connect...\n");
-	int status; 
 
-	int socketId; 
-	if((socketId = socket( PF_INET,SOCK_STREAM , IPPROTO_TCP)) < 0) 
-		printf("error creating client socket! \n"); 
-	
-	
-	struct sockaddr_in remoteAddr; 
-	
-	remoteAddr.sin_family = AF_INET;
-	remoteAddr.sin_addr.s_addr = inet_addr("127.0.0.1"); //serverIP
-	remoteAddr.sin_port = htons(portNumber);
 
-	
-	if( connect(socketId, (struct sockaddr *) &remoteAddr, sizeof(remoteAddr)) < 0) 
-		return -1; 
-	
-	char buffer[] = " hello, world"; 
-	//bzero(buffer,sizeof(buffer));
-	
-	
-	if(sendto(socketId, buffer, sizeof(buffer), 0,(struct sockaddr *)&remoteAddr, sizeof(remoteAddr))==-1)
-		printf("unable to send!\n");
-	printf("file sent!\n");
-		
-	return 0;
-}
 
 int main(int argc, char *argv[]) 
 {
 	/* check command line args. */
-	if(argc < 4){
+
+	if(argc < 2){
 		printf("usage : %s <RouterID> <LogFileName> <Initialization file> \n", argv[0]);
 		exit(1);
 	}
 	
 	
-	printf("...\n"); 
-	if( TCPconnect(9602) < 0)
+	char routerID [sizeof(argv[1])];
+	strcpy(routerID, argv[1]);
+	Router r;
+	r = direct_nbrs_init(*routerID,argv[2]);
+	
+	print_router(r);
+	
+	int i;
+	int highSock;
+	
+	fd_set readSet;
+	FD_ZERO(&readSet);
+	int sock[r.nbrs_count];
+	
+	for(i = 0; i<  r.nbrs_count; i++) 
 	{
-		printf("connecting failed!\n");
-		TCPlisten(9601);
+		sock[i] = TCPlisten(r.nbrs[i].tcp_rec_port);
+		FD_SET(sock[i],&readSet);
+		
+		
 	}
 	
+	highSock = sock[0]; 
+	
+	for(i = 0; i < r.nbrs_count - 1; i++ )
+	{
+		highSock = sock[i] > sock[i+1]? sock[i]: sock[i+1]; 
+	}
+	
+	for(i = 0; i< r.nbrs_count; i++) 
+	{
+		
+		if(TCPconnect(r.nbrs[i].tcp_send_port) < 0)
+			printf("failed to connect"); 
+	} 
+	
+	
+	//int i;
+	 
+	//sock[0] = TCPlisten(8080);
+	//sock[1] = TCPlisten(8081);
+	 
+	
+	// add ports to the list
+	//FD_SET(sock[0], &readSet); 
+	//FD_SET(sock[1], &readSet); 
+	
+	
+	//if (sock[0] > sock[1]) 
+		//highSock = sock[0]; 
+	//else
+		//highSock = sock[1]; 
+		
+	for(;;)
+	{
+		printf("in for\n");		
+		if(select(highSock+1, &readSet, NULL, NULL, NULL) == -1)
+		{
+			perror("Server-select() error lol!");
+			exit(1);
+		}
+		
+		for(i = 0; i< r.nbrs_count; i++) 
+		{
+			if(FD_ISSET(sock[i], &readSet))
+			{
+				TCPaccept(sock[i]);
+			
+			}
+		}
+		
+		
+		
+		
+	}	
+		
 	return 0; 
+	
+// end if
 }
