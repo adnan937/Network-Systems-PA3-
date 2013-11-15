@@ -13,7 +13,7 @@
 #include <signal.h>
 #include <unistd.h>
 
-#define LSPSIZE 360 
+#define LSPSIZE 362
 #define QUEUELENGTH 4 	
 #define MAX_NEIGHBORS 5
 
@@ -114,10 +114,28 @@ int TCPaccept(Neighbor nbr, char *buffer)
 		return -1; 
 	}
 	
+	/*
+	bzero(buffer,sizeof(360));
+					
+	if(recvfrom(newSock, buffer, LSPSIZE, 0, (struct sockaddr *) &nbr.localAddr, &size) <0)
+	{
+		printf("error receiving\n");
+	}
+	else
+	{	
+		LSP templsp; 
+		
+		printf("file received from %c \n",nbr.ID);
+		memcpy((char *)&templsp, buffer, sizeof(templsp));
+		printf("received lsp info...\n");
+		printf("router id: %c\nsequence number: %d\n",templsp.router.ID,templsp.seq_num);
+	}
+	*/
+	printf("Neighbor %c has been accpeted\n", nbr.ID);
 	return newSock;
 }
 
-int TCPconnect(Neighbor nbr)
+int TCPconnect(Neighbor nbr, char* buffer)
 {
         printf("trying to connect...\n");
               
@@ -127,8 +145,14 @@ int TCPconnect(Neighbor nbr)
                 return -1; 
         }
      
-     printf("connected to neighbor %c\n", nbr.ID);
-     return 0;            
+    /*
+	if(sendto(nbr.remoteSock, buffer, LSPSIZE, 0, (struct sockaddr*)&nbr.remoteAddr, sizeof(nbr.remoteAddr)) < 0)
+		printf("send failed sending\n");
+		
+	printf("sent LSP to %c\n",nbr.ID);
+     */
+	printf("connected to neighbor %c\n", nbr.ID);
+    return 0;            
 }
 
 
