@@ -13,16 +13,20 @@
 #include <signal.h>
 #include <unistd.h>
 
+#define LSPSIZE 140 
 #define QUEUELENGTH 4 	
 #define MAX_NEIGHBORS 5
 
 	/* */
 	typedef struct{
+		int connectedS, connectedR; 
 		char src_ID;			/* ID of the parent router */
 		int tcp_send_port;		/* TCP send port number */
 		char ID;				/* ID of the destination router */
 		int tcp_rec_port;		/* TCP receive port number */
 		int link_cost;			/* Link cost */
+		struct sockaddr_in localAddr, remoteAddr; 
+		int localSock, remoteSock; 
 	}Neighbor;
 	
 	/* Node or Router structure */
@@ -57,125 +61,87 @@
 
 //void log_file(char *logfile, char *msg);
 
-int createTCPserverSocket(int portNumber)
+
+void initSock(Router r) 
 {
-	// could be something other than AF_INET
-	int socketId;
-	if((socketId = socket( PF_INET,SOCK_STREAM , IPPROTO_TCP)) < 0) 
-		printf("error creating server socket! \n"); 
+	int i; 
 	
-	struct sockaddr_in servAddr; 
-	
-	servAddr.sin_family = AF_INET;
-	servAddr.sin_addr.s_addr = htonl(INADDR_ANY); 
-	servAddr.sin_port = htons(portNumber);
-	
-	
-	if(bind(socketId,(struct sockaddr *) &servAddr, sizeof(servAddr)) < 0)
-		printf("binding failed\n");
-	
-	
-	
+	for(i =0;i < r.nbrs_count; i++)
+	{
 		
-	return socketId;
+		if((r.nbrs[i].localSock = socket( PF_INET,SOCK_STREAM , IPPROTO_TCP)) < 0) 
+			printf("error creating server socket! \n"); 
+
+		r.nbrs[i].localAddr.sin_family = AF_INET;
+		r.nbrs[i].localAddr.sin_addr.s_addr = htonl(INADDR_ANY); 
+		r.nbrs[i].localAddr.sin_port = htons(r.nbrs[i].tcp_send_port);
+		
+		r.nbrs[i].connectedS = 0;
+		
+		if((r.nbrs[i].remoteSock = socket( PF_INET,SOCK_STREAM , IPPROTO_TCP)) < 0) 
+			printf("error creating client socket! \n"); 
+		
+		r.nbrs[i].remoteAddr.sin_family = AF_INET;
+		r.nbrs[i].remoteAddr.sin_addr.s_addr = inet_addr("127.0.0.1"); //serverIP
+		r.nbrs[i].remoteAddr.sin_port = htons(r.nbrs[i].tcp_rec_port);
+		
+		r.nbrs[i].connectedR = 0;
+	}
+	
+	
+	
 }
 
-int TCPlisten(int port)
+void TCPlisten(Neighbor nbr)
 {
-	int servSock = createTCPserverSocket(port); 
+	if(bind(nbr.localSock,(struct sockaddr *) &nbr.localAddr, sizeof(nbr.localAddr)) < 0)
+		printf("binding failed\n");
 	
-	if( listen(servSock, 1) < 0)
-			printf("listening error \n");	
-		
-	printf("listening. port: %d ...\n",port);
+	if( listen(nbr.localSock, QUEUELENGTH) < 0)
+			printf("listening error \n");
 	
-	//close(clientSock);
-		
-	return servSock;	 
+}
+
+int TCPaccept(Neighbor nbr, char *buffer)
+{
+	int tempSock; 
+	if((tempSock = accept(nbr.localSock,(struct sockaddr *) &nbr.localAddr,(int) sizeof(nbr.localAddr)))< 0)
+	{		
+		printf("accpeting failed\n");   
+		return -1; 
+	}
+	
+	/*
+	if(recvfrom(tempSock, buffer,LSPSIZE,0, &nbr.localAddr, sizeof(nbr.localAddr))< 0) 
+	{
+		printf("failed receiving\n");
+		return -1;
+	}
+	*/
+	nbrs.connectedS = 1;
+	return 0;
 }
 
 int TCPconnect(Neighbor nbr)
 {
-	printf("trying to connect...\n");
-	
-	if((nbr.sock = socket( PF_INET,SOCK_STREAM , IPPROTO_TCP)) < 0) 
-	{
-		printf("TCPconnect failed in creating a socket\n");
-		return -1; 
-	}
-	
-	if( connect(nbr.sock, (struct sockaddr *) &nbr.remoteAddr, sizeof(remoteAddr)) < 0)
-	{
-		printf("TCPconnect failed connecting\n");
-		return -1; 
-	}
-		
+        printf("trying to connect...\n");
+        
+        if((nbr.sock = socket( PF_INET,SOCK_STREAM , IPPROTO_TCP)) < 0) 
+        {
+                printf("TCPconnect failed in creating a socket\n");
+                return -1; 
+        }
+        
+        if( connect(nbr.sock, (struct sockaddr *) &nbr.remoteAddr, sizeof(remoteAddr)) < 0)
+        {
+                printf("TCPconnect failed connecting\n");
+                return -1; 
+        }
+     
+     nbr.connectedR = 1; 	
+     return 0;            
 }
 
-void TCPaccept(int sock)
-{
-	
-	struct sockaddr_in cliAddr; ;
-	int clientSock;
-	int cliLen = sizeof(cliAddr);
-			
-			
-									
-	if((clientSock = accept(sock, (struct sockaddr *) &cliAddr, &cliLen)) < 0) 
-		printf("server accepting failed\n"); 
-				
-	char buffer[200]; 
-	bzero(buffer,sizeof(buffer));
-			
-	if( recvfrom(clientSock, &buffer, sizeof(buffer), 0, (struct sockaddr *) &cliAddr, &cliLen) == -1)
-		printf(" error with getting the file\n"); 
-				
-	printf("%s\n", buffer); 
-	
-}
-
-int TCPconnect(int portNumber)
-{ 	
-	
-	printf("trying to connect...\n");
-	int status; 
-
-	int socketId; 
-	if((socketId = socket( PF_INET,SOCK_STREAM , IPPROTO_TCP)) < 0) 
-		printf("error creating client socket! \n"); 
-	
-	
-	struct sockaddr_in remoteAddr; 
-	
-	remoteAddr.sin_family = AF_INET;
-	remoteAddr.sin_addr.s_addr = inet_addr("127.0.0.1"); //serverIP
-	remoteAddr.sin_port = htons(portNumber);
-
-	
-	if( connect(socketId, (struct sockaddr *) &remoteAddr, sizeof(remoteAddr)) < 0) 
-		return -1; 
-	
-	char buffer[] = " hello, world"; 
-	//bzero(buffer,sizeof(buffer));
-	
-	
-	if(sendto(socketId, buffer, sizeof(buffer), 0,(struct sockaddr *)&remoteAddr, sizeof(remoteAddr))==-1)
-		printf("unable to send!\n");
-	else
-		{
-			printf("file sent!\n");
-		
-			for(;;)
-			{
-			}
-		}	
-	return 0;
-}
-
-//#include <stdio.h>
-//#include <stdlib.h>
-//#include <string.h>
-//#include "router_init.h"
 
 #define BUFSIZE 20
 
