@@ -94,6 +94,24 @@ int TCPlisten(int port)
 	return servSock;	 
 }
 
+int TCPconnect(Neighbor nbr)
+{
+	printf("trying to connect...\n");
+	
+	if((nbr.sock = socket( PF_INET,SOCK_STREAM , IPPROTO_TCP)) < 0) 
+	{
+		printf("TCPconnect failed in creating a socket\n");
+		return -1; 
+	}
+	
+	if( connect(nbr.sock, (struct sockaddr *) &nbr.remoteAddr, sizeof(remoteAddr)) < 0)
+	{
+		printf("TCPconnect failed connecting\n");
+		return -1; 
+	}
+		
+}
+
 void TCPaccept(int sock)
 {
 	
