@@ -5,6 +5,7 @@
 
 #include "router_init.h"
 
+#define LSPSIZE 360 
 
 
 
@@ -29,7 +30,7 @@ int main(int argc, char *argv[])
 	lsp.router = r; 
 	lsp.seq_num = 0; 
 	
-	
+	r = initSock(r);
 	print_router(r);
 	
 	int i;
@@ -50,30 +51,29 @@ int main(int argc, char *argv[])
 
 	int sock[r.nbrs_count];
 	
-	
+	//first try to connect to neighbors 
 	for(i = 0; i< r.nbrs_count; i++) 
 	{
 		bzero(buffer, sizeof(lsp));
-		if(TCPconnect(r.nbrs[i].tcp_send_port, buffer) < 0)
-			r.nbrs[i].connected = 0;
+		if(TCPconnect(r.nbrs[i]) < 0)
+			r.nbrs[i].connectedR = 0;
 		else 
-			r.nbrs[i].connected = 1;
-
-		
+			r.nbrs[i].connectedR = 1;
 	} 
 	
+	//then listen 
 	for(i = 0; i<  r.nbrs_count; i++) 
 	{
-		sock[i] = TCPlisten(r.nbrs[i].tcp_rec_port);
-		FD_SET(sock[i],&readSet);
+		TCPlisten(r.nbrs[i]);
+		FD_SET(r.nbrs[i].localSock,&readSet);
 		
 	}
 	
-	highSock = sock[0]; 
+	highSock = r.nbrs[0].localSock; 
 	
-	for(i = 0; i < r.nbrs_count - 1; i++ )
+	for(i = 0; i < r.nbrs_count-1; i++ )
 	{
-		highSock = sock[i] > sock[i+1]? sock[i]: sock[i+1]; 
+		highSock = r.nbrs[i].localSock > r.nbrs[i+1].localSock? r.nbrs[i].localSock: r.nbrs[i+1].localSock; 
 	}
 	
 	int counter = 0; 
@@ -95,21 +95,43 @@ int main(int argc, char *argv[])
 		}
 		
 		
-		//printf("85\n");
 		for(i = 0; i< r.nbrs_count; i++) 
 		{
-			if(FD_ISSET(sock[i], &tempReadSet))
-			{
-				bzero(buffer,sizeof(lsp));
-				if( TCPaccept(sock[i], buffer) == 0) 
-				{
-					r.nbrs[i].connected = 1;
-					printf("file received from %c \n",r.nbrs[i].ID);
-					memcpy((char *)&templsp, buffer, sizeof(templsp));
 			
-					printf("received lsp info...\n");
-					printf("router id: %c\nsequence number: %d\n",templsp.router.ID,templsp.seq_num);
-			
+			if(FD_ISSET(r.nbrs[i].localSock, &tempReadSet))
+			{	
+				printf("....\n");
+				if( r.nbrs[i].connectedS == 0) 
+				{	
+					int newSock;
+					if ((newSock = TCPaccept(r.nbrs[i], buffer)) > -1)
+					{
+						r.nbrs[i].connectedS= 1;
+						r.nbrs[i].localSock = newSock;
+						
+						printf("sock: %d\n",r.nbrs[i].localSock);
+						printf("connectedS: %d\n",r.nbrs[i].connectedS);
+						
+						//FD_SET(r.nbrs[i].localSock,&readSet);
+					}
+				}
+				else
+				{	
+					printf("in else\n");
+					bzero(buffer,sizeof(360));
+					int size = sizeof(&r.nbrs[i].localAddr);
+					
+					if(recvfrom(r.nbrs[i].localSock, buffer, LSPSIZE, 0, (struct sockaddr *) &r.nbrs[i].localAddr, &size) <0)
+					{
+						printf("error receiving\n");
+					}
+					else
+					{	
+						printf("file received from %c \n",r.nbrs[i].ID);
+						memcpy((char *)&templsp, buffer, sizeof(templsp));
+						printf("received lsp info...\n");
+						printf("router id: %c\nsequence number: %d\n",templsp.router.ID,templsp.seq_num);
+					}
 				}
 				
 			}
@@ -123,21 +145,37 @@ int main(int argc, char *argv[])
 			
 		for(i = 0; i< r.nbrs_count; i++) 
 		{	
-			buffer = malloc(sizeof(lsp));
-			bzero(buffer, sizeof(lsp));
-			memcpy(buffer, (char*) &lsp, sizeof(lsp)); 
 			
-			if(r.nbrs[i].connected == 1)
+			if(r.nbrs[i].connectedS == 1 &&r.nbrs[i].connectedR == 0)
 			{
-				if(TCPconnect(r.nbrs[i].tcp_send_port, buffer) < 0)
+				if(TCPconnect(r.nbrs[i]) < 0)
 				{
 					printf("failed to connect to %c \n", r.nbrs[i].ID); 
-					r.nbrs[i].connected = 0;
+					r.nbrs[i].connectedR = 0;
 				}
 				else
-					printf("file sent to %c \n", r.nbrs[i].ID);
+					r.nbrs[i].connectedR = 1;
+					
 			}
 		}
+		
+		for(i = 0; i<r.nbrs_count; i++)
+		{
+			if(r.nbrs[i].connectedR == 1) 
+			{
+				buffer = malloc(sizeof(LSPSIZE));
+				bzero(buffer, sizeof(LSPSIZE));
+				memcpy(buffer, (char*) &lsp, sizeof(LSPSIZE)); 
+		
+				if(sendto(r.nbrs[i].remoteSock, buffer, LSPSIZE, 0, (struct sockaddr*)&r.nbrs[i].remoteAddr, sizeof(r.nbrs[i].remoteAddr)) < 0)
+					printf("send failed sending\n");
+		
+				printf("sent LSP to %c\n",r.nbrs[i].ID);
+			}
+			
+			
+		}
+		
 		counter ++;
 		
 	}	
