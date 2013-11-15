@@ -1,137 +1,148 @@
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
+/* routed_LS.c */
+/* This is a link state routing program that uses TCP protocol */
+
+
+
 #include "router_init.h"
 
-#define BUFSIZE 20
 
 
-Router direct_nbrs_init(char router_ID,char *filename)
+
+
+int main(int argc, char *argv[]) 
 {
-	
-	FILE *f;
-	char line[BUFSIZE];
-	char *linePtr;
-	int length;
-	char *substr;		// Pointer to subString returned by tokenizer
-	int n;				// Counter for the number of chars
-	
-	// declare and initialize a router
-	Router router;
-	router.ID = router_ID;
-	printf("Here's your shit ID:%c \n", router.ID);
-	router.nbrs_count = 0;
-	
-	if( (f = fopen(filename, "r")) == NULL )
-		printf("unable to open the file");
-	
-	while( fgets(line,BUFSIZE,f) != NULL )
-	{
-		linePtr = line;
-		linePtr++;					//Get rid of first char
-		length = strlen(linePtr);	//Get length of string
-		linePtr[length - 2] = '\0';	//Set next to last char to null
-		
-		//printf("\nline = %s\n", linePtr);
-		
-		// Read first char of the line "Src router"
-		substr = strtok(linePtr,",");
-		n = 1;
-		//printf("substr = %s\n", substr);
-		//printf("routerID= %c\n", router_ID);
-		if(substr[0] == router_ID)
-		{
-			Neighbor nbr;
-			
-			// While the line isn't finished
-			while(substr != NULL)		
-			{
-				switch(n)
-				{
-					case 1:
-						nbr.src_ID = substr[0];
-						//printf("nbr.src_id=%c \n",nbr.src_ID);
-						break;
-					case 2:
-						nbr.tcp_send_port = atoi(substr);
-						//printf("nbr.tcp_send_port=%d \n",nbr.tcp_send_port);
-						break;
-					case 3:
-						nbr.ID = substr[0];
-						//printf("nbr_id=%c \n",nbr.ID);
-						break;
-					case 4:
-						nbr.tcp_rec_port = atoi(substr);
-						//printf("nbr.tc_rec_port=%d \n",nbr.tcp_rec_port);
-						break;
-					case 5:
-						nbr.link_cost = atoi(substr);
-						//printf("nbr.link_cost=%d \n",nbr.link_cost);
-						break;
-				}
-				substr = strtok(NULL, ","); // Get next word
-				n++;					    // Increment counter for words in the line
-			}
-			router.nbrs[router.nbrs_count] = nbr;
-			router.nbrs_count++;
-		}
+	/* check command line args. */
 
-	}
-	fclose(f);
-	return router;
-}
-
-
-void print_router(Router router)
-{
-    printf("Router ID: %c, num of neighbors %d\n", router.ID, router.nbrs_count);
-    int i;
-    Neighbor n;
-    printf("Dest.\tCost\tOut_TCP_port\tDest_TCP_port\n");
-    for (i=0; i<router.nbrs_count; i++)
-    {
-        n = router.nbrs[i];
-        printf("%c\t%d\t\t%d\t\t%d\n", n.ID, n.link_cost, n.tcp_send_port,n.tcp_rec_port);
-    }
-}
-
-int flag=0;
-void log_file(char *logfile, char *msg)
-{
-	FILE *f;
-	//f = fopen(logfile, "r");
-	
-	// logfile is not created
-	if(flag == 0)
-	{
-		if( (f = fopen(logfile, "w")) == NULL)
-			printf("unable to create logfile\n");
-			flag = 1;
+	if(argc < 2){
+		printf("usage : %s <RouterID> <LogFileName> <Initialization file> \n", argv[0]);
+		exit(1);
 	}
 	
-	// Appened new msgs to already existed logfile.
-	else
-	{
-		if( (f = fopen(logfile, "a")) == NULL)
-			printf("unable to append to logfile\n");
-			
-		else
-			fputs(msg, f);
-	}
 	
-	fclose(f);
-}
-
-
-int main(int argc, char *argv[])
-{
 	char routerID [sizeof(argv[1])];
 	strcpy(routerID, argv[1]);
 	Router r;
 	r = direct_nbrs_init(*routerID,argv[2]);
+	LSP lsp;
+	LSP templsp; 
+	LSP checklsp;
+	lsp.router = r; 
+	lsp.seq_num = 0; 
+	
 	
 	print_router(r);
 	
-	return 0;
-}
+	initSock(r);
+	
+	int i;
+	int highSock;
+	char* buffer = malloc(sizeof(lsp));
+	bzero(buffer,sizeof(buffer));
+	
+	memcpy(buffer,(char*) &lsp, sizeof(lsp));
+	memcpy((char*) &checklsp, buffer, sizeof(checklsp));
+	printf("router id: %c\nsequence number: %d\n sizeof: %d\n",checklsp.router.ID,checklsp.seq_num, sizeof(lsp));
+	
+	
+	fd_set readSet;
+	fd_set tempReadSet; 
+	
+	FD_ZERO(&readSet);
+	FD_ZERO(&tempReadSet);
 
+	int sock[r.nbrs_count];
+	
+	
+	for(i = 0; i< r.nbrs_count; i++) 
+	{
+		
+		if(TCPconnect(r.nbrs[i]) < 0)
+			r.nbrs[i].connectedR= 0;
+		else
+			r.nbrs[i].connectedR = 1;
+	} 
+	
+	for(i = 0; i<  r.nbrs_count; i++) 
+	{
+		TCPlisten(r.nbrs[i]);
+		FD_SET(r.nbrs[i].localSock,&readSet);
+		
+	}
+	
+	highSock = r.nbrs.localSock[0]; 
+	
+	for(i = 0; i < r.nbrs_count - 1; i++ )
+	{
+		highSock = r.nbrs.localSock[i] > r.nbrs.localSock[i+1]? r.nbrs.localSock[i]: r.nbrs.localSock[i+1]; 
+	}
+	
+	int counter = 0; 
+	struct timeval tv; 
+	tv.tv_sec = 5; 	
+	tv.tv_usec = 0;
+		
+	for(;;)
+	{	
+		tv.tv_sec = 5; 	
+		tv.tv_usec = 0;
+			
+		tempReadSet = readSet; 
+		printf("- %d\n", counter);
+				
+		if(select(highSock+1, &tempReadSet, 0, 0, &tv) < 0) 
+		{
+			if("select error!\n");
+		}
+		
+		
+		//printf("85\n");
+		for(i = 0; i< r.nbrs_count; i++) 
+		{
+			if(FD_ISSET(r.nbrs.localSock[i], &tempReadSet))
+			{
+				bzero(buffer,sizeof(lsp));
+				if( TCPaccept(r.nbrs[i], buffer) == 0) 
+				{
+					r.nbrs[i].connectedS = 1;
+					printf("file received from %c \n",r.nbrs[i].ID);
+					memcpy((char *)&templsp, buffer, sizeof(templsp));
+			
+					printf("received lsp info...\n");
+					printf("router id: %c\nsequence number: %d\n",templsp.router.ID,templsp.seq_num);
+			
+				}
+				
+			}
+		}
+		
+		
+		//printf("116\n");
+	
+		sleep(5);
+		lsp.seq_num = 1 + lsp.seq_num;
+			
+		for(i = 0; i< r.nbrs_count; i++) 
+		{	
+			buffer = malloc(sizeof(lsp));
+			bzero(buffer, sizeof(lsp));
+			memcpy(buffer, (char*) &lsp, sizeof(lsp)); 
+			
+			if(r.nbrs[i].connectedR == 1)
+			{
+				if(TCPconnect(r.nbrs[i]) < 0)
+				{
+					printf("failed to connect to %c \n", r.nbrs[i].ID); 
+					r.nbrs[i].connectedR = 0;
+				}
+				else
+					printf("file sent to %c \n", r.nbrs[i].ID);
+			}
+		}
+		counter ++;
+		
+	}	
+	
+	return 0; 
+	
+// end if
+}
