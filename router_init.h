@@ -13,7 +13,7 @@
 #include <signal.h>
 #include <unistd.h>
 
-#define LSPSIZE 140 
+#define LSPSIZE 360 
 #define QUEUELENGTH 4 	
 #define MAX_NEIGHBORS 5
 
@@ -62,7 +62,7 @@
 //void log_file(char *logfile, char *msg);
 
 
-void initSock(Router r) 
+Router initSock(Router r) 
 {
 	int i; 
 	
@@ -71,7 +71,7 @@ void initSock(Router r)
 		
 		if((r.nbrs[i].localSock = socket( PF_INET,SOCK_STREAM , IPPROTO_TCP)) < 0) 
 			printf("error creating server socket! \n"); 
-
+		
 		r.nbrs[i].localAddr.sin_family = AF_INET;
 		r.nbrs[i].localAddr.sin_addr.s_addr = htonl(INADDR_ANY); 
 		r.nbrs[i].localAddr.sin_port = htons(r.nbrs[i].tcp_send_port);
@@ -89,11 +89,12 @@ void initSock(Router r)
 	}
 	
 	
-	
+	return r; 
 }
 
 void TCPlisten(Neighbor nbr)
 {
+	
 	if(bind(nbr.localSock,(struct sockaddr *) &nbr.localAddr, sizeof(nbr.localAddr)) < 0)
 		printf("binding failed\n");
 	
@@ -104,41 +105,29 @@ void TCPlisten(Neighbor nbr)
 
 int TCPaccept(Neighbor nbr, char *buffer)
 {
-	int tempSock; 
-	if((tempSock = accept(nbr.localSock,(struct sockaddr *) &nbr.localAddr,(int) sizeof(nbr.localAddr)))< 0)
+	
+	int size = sizeof(nbr.localAddr);
+	int newSock;
+	if((newSock = accept(nbr.localSock,(struct sockaddr *) &nbr.localAddr,&size))< 0)
 	{		
 		printf("accpeting failed\n");   
 		return -1; 
 	}
 	
-	/*
-	if(recvfrom(tempSock, buffer,LSPSIZE,0, &nbr.localAddr, sizeof(nbr.localAddr))< 0) 
-	{
-		printf("failed receiving\n");
-		return -1;
-	}
-	*/
-	nbrs.connectedS = 1;
-	return 0;
+	return newSock;
 }
 
 int TCPconnect(Neighbor nbr)
 {
         printf("trying to connect...\n");
-        
-        if((nbr.sock = socket( PF_INET,SOCK_STREAM , IPPROTO_TCP)) < 0) 
-        {
-                printf("TCPconnect failed in creating a socket\n");
-                return -1; 
-        }
-        
-        if( connect(nbr.sock, (struct sockaddr *) &nbr.remoteAddr, sizeof(remoteAddr)) < 0)
+              
+        if(connect(nbr.remoteSock, (struct sockaddr *) &nbr.remoteAddr, sizeof(nbr.remoteAddr)) < 0)
         {
                 printf("TCPconnect failed connecting\n");
                 return -1; 
         }
      
-     nbr.connectedR = 1; 	
+     printf("connected to neighbor %c\n", nbr.ID);
      return 0;            
 }
 
