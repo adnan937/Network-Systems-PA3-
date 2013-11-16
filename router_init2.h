@@ -10,29 +10,27 @@
 #define MAX_NODES 6
 #define BUFSIZE 20
 #define LSP_TTL 10
+#define LSPSIZE 56
 #define INFINITY 999
-
-	/* Routing Table Structure */
-	typedef struct{
-		int cost[MAX_NODES][MAX_NODES];
-	}RoutingTable;
+#define QUEUELENGTH 4    
 		
 	/* Neighbor node structure */
 	typedef struct{
-		char src_ID[1];		/* ID of the parent router */
-		char ID[1];			/* ID of the destination router */
-		int send_port;		/* TCP send port number */
-		int recv_port;		/* TCP receive port number */
-		int link_cost;		/* Link cost */
-		int connected;
-		int send_socket;
+		char src_ID[1];				/* ID of the parent router */
+		char ID[1];					/* ID of the destination router */
+		int send_port;				/* TCP send port number */
+		int recv_port;				/* TCP receive port number */
+		int link_cost;				/* Link cost */
+		int connectedS, connectedR;	/* Connection Flag */
+		int localSock, remoteSock;	/* Sockets FDs */
 		struct sockaddr_in localAddr, remoteAddr;
-		int node_num;
+		int node_num;				/* convert router name to node number */
 	}Neighbor;
 	
 	typedef struct{
 		char dest[1];
 		int link_cost;
+		int node_num;
 		}LSPentry;
 	
 	/* Link State Packet structure */
@@ -53,7 +51,7 @@
 		LSP self_packet;
 		LSP recved_packets[MAX_NODES];
 		time_t timestamp;				/*  */
-		RoutingTable routing_table;
+		int routing_table[MAX_NODES][MAX_NODES];
 		int node_num;
 	}Router;
 		
@@ -195,6 +193,18 @@ void LSP_init(Router *router)
 		n = router->nbrs[i];
 		strcpy(router->self_packet.table[i].dest, n.ID);
 		router->self_packet.table[i].link_cost = n.link_cost;
+		if(*n.ID == 'A')
+			router->self_packet.table[i].node_num = 0;
+		if(*n.ID == 'B')
+			router->self_packet.table[i].node_num = 1;
+		if(*n.ID == 'C')
+			router->self_packet.table[i].node_num = 2;
+		if(*n.ID == 'D')
+			router->self_packet.table[i].node_num = 3;
+		if(*n.ID =='E')
+			router->self_packet.table[i].node_num = 4;
+		if(*n.ID =='F')
+			router->self_packet.table[i].node_num = 5;
 	}
 		
 	router->self_packet.ttl = LSP_TTL;
@@ -203,10 +213,19 @@ void LSP_init(Router *router)
 /*
  * 
  */
-void print_LSP(LSP *lsp, FILE *file)
+void print_LSP(LSP *lsp, char *log_filename)
 {
 	int i;
     char str[2048];
+    
+    // Open log file
+    FILE * file;
+    file = fopen(log_filename, "r+");
+    if (!file)
+    {
+        printf("Failed open log file\n");
+        exit(1);
+    }
     
     sprintf(str, "Link State Packet of %s------------\nDest\tCost\n", lsp->routerID);
     if (file) 
@@ -224,16 +243,27 @@ void print_LSP(LSP *lsp, FILE *file)
 			printf("%s", str);
 		}
 	}
+	
+	fclose(file);
 }
 
 /* 
  * Update a router packet's list with the received packet
  * return:  0 discard this LSP.
- * 			1 LSP updated and needs forwarding.
+ * 			1 LSP is new! LSP_list is updated, and needs forwarding.
+ * 			2 LSP is new! LSP_list is updated, LSP causes change to the table, and needs forwarding.
  */
-int update_LSP_list(Router *router, LSP *lsp)
+int check_LSP(Router *router, LSP *lsp)
 {
 	int tmp;
+	int i,j;
+	char nodes [6];
+    nodes[0] = 'A';
+    nodes[1] = 'B';
+    nodes[2] = 'C';
+    nodes[3] = 'D';
+    nodes[4] = 'E';
+    nodes[5] = 'F';
 		
     // check TTL, discard lsp if TTL = 0
     if (lsp->ttl <=0)
@@ -242,62 +272,32 @@ int update_LSP_list(Router *router, LSP *lsp)
 		return tmp;
 	}
 	
-    if(*(lsp->routerID) == 'A')
-    {
-		if(router->recved_packets[0].seq_num < lsp->seq_num)
-		{
-			router->recved_packets[0] = *lsp;
-			tmp = 1;
-		}
-		else tmp = 0;
-	}	
-	if(*(lsp->routerID) == 'B')
+	LSPentry *entry;
+	for(i=0 ; i<6 ; i++)
 	{
-		if(router->recved_packets[1].seq_num < lsp->seq_num)
+		if(*lsp->routerID == nodes[i])
 		{
-			router->recved_packets[1] = *lsp;
-			tmp = 1;
+			// Check if packet is new!
+			if(router->recved_packets[i].seq_num < lsp->seq_num)
+			{
+				// update lsp list.
+				router->recved_packets[i] = *lsp;
+				tmp = 1;
+				
+				for(j=0 ; j<lsp->length ; j++)
+				{
+					entry = lsp->table;
+					if(router->routing_table[i][entry->node_num] != entry->link_cost)
+					{	
+						tmp= 2;
+						// update table.
+						router->routing_table[i][entry->node_num] = entry->link_cost;
+					}
+				}
+			}
 		}
-		else tmp = 0;
 	}
-	if(*(lsp->routerID) == 'C')
-	{
-		if(router->recved_packets[2].seq_num < lsp->seq_num)
-		{
-			router->recved_packets[2] = *lsp;
-			tmp = 1;
-		}
-		else tmp = 0;
-	}		
-	if(*(lsp->routerID) == 'D')
-	{
-		if(router->recved_packets[3].seq_num < lsp->seq_num)
-		{
-			router->recved_packets[3] = *lsp;
-			tmp = 1;
-		}
-		else tmp = 0;
-	}	
-	if(*(lsp->routerID) == 'E')
-	{
-		if(router->recved_packets[4].seq_num < lsp->seq_num)
-		{
-			router->recved_packets[4] = *lsp;
-			tmp = 1;
-		}
-		else tmp = 0;
-	}	
-	if(*(lsp->routerID) == 'F')
-	{
-		if(router->recved_packets[5].seq_num < lsp->seq_num)
-		{
-			router->recved_packets[5] = *lsp;
-			tmp = 1;
-		}
-		else tmp = 0;	
-	}
-	
-    return tmp;
+	return tmp;
 }
 
 /* 
@@ -315,21 +315,21 @@ void routing_table_init(Router *router)
    {
 	   for(col=0 ; col<MAX_NODES ; col++)
 	   {
-		   router->routing_table.cost[row][col] = INFINITY;
+		   router->routing_table[row][col] = INFINITY;
 	   }
    }
     
    for (col=0 ; col<router->nbrs_count ; col++)
    {
 	   nbr = &(router->nbrs[col]);
-	   router->routing_table.cost[router->node_num][nbr->node_num] = nbr->link_cost;
+	   router->routing_table[router->node_num][nbr->node_num] = nbr->link_cost;
    }
 }   
 
 /*
  * 
  */
-void print_routing_table(Router *router, FILE* file)
+void print_routing_table(Router *router, char* log_filename)
 {   
     int i,j;
     char str[1024];
@@ -342,7 +342,16 @@ void print_routing_table(Router *router, FILE* file)
     nodes[4] = 'E';
     nodes[5] = 'F';
     
-    sprintf(str, "Routing Table of %s------------\n\tA\tB\tC\tD\tE\tF\n", router->ID);
+    // Open log file
+    FILE * file;
+    file = fopen(log_filename, "r+");
+    if (!file)
+    {
+        printf("Failed open log file \n");
+        exit(1);
+    }
+    
+    sprintf(str, "Routing Table of %s------------\nA\tB\tC\tD\tE\tF\n", router->ID);
     if (file)
     {
         fwrite(str, sizeof(char), strlen(str), file);
@@ -354,7 +363,7 @@ void print_routing_table(Router *router, FILE* file)
 		printf("%c\t", nodes[i]);
 		for(j=0 ; j<MAX_NODES ; j++)
 		{
-			sprintf(str, "%d\t",router->routing_table.cost[i][j]);
+			sprintf(str, "%d\t",router->routing_table[i][j]);
 			if (file)
 			{
 				fwrite(str, sizeof(char), strlen(str), file);
@@ -368,6 +377,16 @@ void print_routing_table(Router *router, FILE* file)
 			printf("%s", str);
 		}
 	}
+	fclose(file);
+}
+
+int allselected(int *selected)
+{
+	int i;
+	for(i=0;i<MAX_NODES;i++)
+		if(selected[i] == 0)
+			return 0;
+    return 1;
 }
 
 /* 
@@ -375,166 +394,139 @@ void print_routing_table(Router *router, FILE* file)
  * return:  1 for updated routing table
  *          0 for routing table unchanged
  
-int update_routing_table(Router *router, LSP *lsp)
+ 
+int update_routing_table(Router *router, int *cost)
 {
-    int rtn = 0;
-    int i, j, k,newcost, basic_cost = MAX_COST;
-    int basic_out_port, basic_dst_port;
-    int exist = 0;
-    RoutingTable *routingtable = &(router->routingtable);
-    if (mode)
-    {// add lsp mode
-        // find cost between(router->ID, lsp->ID) in current routing table
-        for (i=0; i<routingtable->len; i++)
+//void shortpath(int cost[][MAX], unsigned int *nextHop, unsigned int *distance)
+
+		router->routing_table;
+        
+        int selected[MAX_NODES] = {0};
+        int current=0,i,k,n,dc,p,q,smalldist,newdist;
+        
+        for(i=0;i<MAX;i++)
+                distance[i]=INFINITE;
+                router->table
+        
+        selected[current]=1;
+        distance[0]=0;
+        current=0;
+        n=0;
+        /*
+        for(p=0;p<MAX;p++)
         {
-            if(strcmp(lsp->ID, routingtable->tableContent[i].dst)==0)
-            {
-                basic_cost = routingtable->tableContent[i].cost;
-                basic_out_port = routingtable->tableContent[i].out_port;
-                basic_dst_port = routingtable->tableContent[i].dst_port;
-            }
-        }
-
-        for (i=0; i<lsp->len; i++)
-        {
-            exist = 0;
-            for (j=0; j<routingtable->len; j++)
-            {
-                if(strcmp(lsp->table[i].dst, routingtable->tableContent[j].dst)==0)
+                printf("For router %d  \n", p);
+                for(q=0;q<MAX;q++)
                 {
-                    // destination already in routing table
-                    exist = 1;
-                    // compare cost
-                    newcost = basic_cost + lsp->table[i].cost;
-                    if (newcost < routingtable->tableContent[j].cost)
-                    {// find path with lower cost
-                        rtn = 1;
-                        routingtable->tableContent[j].cost = newcost;
-                        routingtable->tableContent[j].out_port = basic_out_port;
-                        routingtable->tableContent[j].dst_port = basic_dst_port;
-                        strcpy(routingtable->tableContent[j].nextHop, lsp->ID);
-                    }
-                    if (newcost == routingtable->tableContent[i].cost)
-                    {// compare nextHop ID
-                        if (lsp->ID[0] < routingtable->tableContent[j].nextHop[0])
-                        {// find path with same cost but lower ID
-                            rtn = 1;
-                            routingtable->tableContent[j].cost = newcost;
-                            routingtable->tableContent[j].out_port = basic_out_port;
-                            routingtable->tableContent[j].dst_port = basic_dst_port;
-                            strcpy(routingtable->tableContent[j].nextHop, lsp->ID);
-                        }
-                    }
-                }
-                if (strcmp(lsp->table[i].dst, router->ID)==0)
-                {
-                    exist = 1;
-                }
-            }
-            if (!exist)
-            {// add dst into routing table
-                strcpy(routingtable->tableContent[routingtable->len].dst, lsp->table[i].dst);
-                newcost = basic_cost + lsp->table[i].cost;
-                routingtable->tableContent[routingtable->len].cost = newcost;
-                routingtable->tableContent[routingtable->len].out_port = basic_out_port;
-                routingtable->tableContent[routingtable->len].dst_port = basic_dst_port;
-                strcpy(routingtable->tableContent[routingtable->len].nextHop, lsp->ID);
-                routingtable->len++;
-                rtn = 1;
-            }
-        }
-    }
-    else
-    {// remove lsp info from routing table
-    }    
-    return rtn;
-}   */ 
-
-int createTCPsocket(int portNumber)
-{
-	// could be something other than AF_INET
-    int socketId;
-    if((socketId = socket( PF_INET,SOCK_STREAM , 0)) < 0) 
-		printf("error creating server socket! \n"); 
-        
-    struct sockaddr_in servAddr; 
-        
-    servAddr.sin_family = AF_INET;
-    servAddr.sin_addr.s_addr = htonl(INADDR_ANY); 
-    servAddr.sin_port = htons(portNumber);
-        
-    if(bind(socketId,(struct sockaddr *) &servAddr, sizeof(servAddr)) < 0)
-		printf("binding failed\n");
-              
-    return socketId;
-}
-
-
-int TCPlisten(int port)
-{
-	int servSock = createTCPsocket(port); 
-        
-    if(listen(servSock, 1) < 0)
-		printf("listening error \n");        
-	
-	printf("listening. port: %d ...\n",port);
-	
-	//close(clientSock);
-    
-    return servSock;         
-}
-
-void TCPaccept(int sock)
-{
-	struct sockaddr_in cliAddr; ;
-    int clientSock;
-    socklen_t cliLen = sizeof(cliAddr);
-    
-    if((clientSock = accept(sock, (struct sockaddr *) &cliAddr, &cliLen)) < 0) 
-		printf("server accepting failed\n"); 
-                                
-    char buffer[200]; 
-    bzero(buffer,sizeof(buffer));
+                        printf("Shortpath recieved %d  \n", cost[p][q]);
                         
-    if( recvfrom(clientSock, &buffer, sizeof(buffer), 0, (struct sockaddr *) &cliAddr, &cliLen) == -1)
-		printf(" error with getting the file\n"); 
+                }
                                 
-    printf("%s\n", buffer);    
-}
+        }
+        
+        while(!allselected(selected))
+        {
+                
+                
+                smalldist=INFINITE;
+                dc=distance[current];
+                for(i=0;i<MAX;i++)
+                {
+                        if(selected[i]==0)
+                        {
+                                newdist=dc+cost[current][i];
+                                if(newdist<distance[i])
+                                {
+                                        distance[i]=newdist;
+                                        nextHop[i]=current;
+                                        printf(" nextHop[i] is :  %d \n", nextHop[i]);
+                                }
+                                if(distance[i]<smalldist)
+                                {
+                                        smalldist=distance[i];
+                                        printf(" NewSmallest route:  %d \n", smalldist);
 
-int TCPconnect(int portNumber)
+                                        k=i;
+                                }
+                        }
+                }
+                current=k;
+                selected[current]=1;
+                n++;
+                //if(n>=7)
+                        //break;
+                
+        }
+}*/
+
+/* */
+Router initSock(Router r) 
 {
-	printf("trying to connect...\n");
-    //int status; 
-
-    int socketId; 
-    if((socketId = socket( PF_INET,SOCK_STREAM , 0)) < 0) 
-		printf("error creating client socket! \n"); 
+        int i; 
         
-    struct sockaddr_in remoteAddr; 
+        for(i =0;i < r.nbrs_count; i++)
+        {
+                
+                if((r.nbrs[i].localSock = socket( PF_INET,SOCK_STREAM , IPPROTO_TCP)) < 0) 
+                        printf("error creating server socket! \n"); 
+                
+                r.nbrs[i].localAddr.sin_family = AF_INET;
+                r.nbrs[i].localAddr.sin_addr.s_addr = htonl(INADDR_ANY); 
+                r.nbrs[i].localAddr.sin_port = htons(r.nbrs[i].send_port);
+                
+                r.nbrs[i].connectedS = 0;
+                
+                if((r.nbrs[i].remoteSock = socket( PF_INET,SOCK_STREAM , IPPROTO_TCP)) < 0) 
+                        printf("error creating client socket! \n"); 
+                
+                r.nbrs[i].remoteAddr.sin_family = AF_INET;
+                r.nbrs[i].remoteAddr.sin_addr.s_addr = inet_addr("127.0.0.1"); //serverIP
+                r.nbrs[i].remoteAddr.sin_port = htons(r.nbrs[i].recv_port);
+                
+                r.nbrs[i].connectedR = 0;
+        }
         
-    remoteAddr.sin_family = AF_INET;
-    remoteAddr.sin_addr.s_addr = inet_addr("127.0.0.1"); //serverIP
-    remoteAddr.sin_port = htons(portNumber);
-
         
-    if(connect(socketId, (struct sockaddr *) &remoteAddr, sizeof(remoteAddr)) < 0) 
-		return -1; 
-        
-    char buffer[] = " hello, world"; 
-    //bzero(buffer,sizeof(buffer));
-        
-        
-    if(sendto(socketId, buffer, sizeof(buffer), 0,(struct sockaddr *)&remoteAddr, sizeof(remoteAddr))==-1)
-		printf("unable to send!\n");
-    
-    else
-    {
-		printf("file sent!\n");
-		for(;;)
-		{
-		}
-	}        
-        return 0;
+        return r; 
 }
 
+/* */
+void TCPlisten(Neighbor nbr)
+{
+        
+        if(bind(nbr.localSock,(struct sockaddr *) &nbr.localAddr, sizeof(nbr.localAddr)) < 0)
+                printf("binding failed\n");
+        
+        if( listen(nbr.localSock, QUEUELENGTH) < 0)
+                        printf("listening error \n");
+        
+}
+
+/* */
+int TCPaccept(Neighbor nbr)
+{
+        
+        socklen_t size = sizeof(nbr.localAddr);
+        int newSock;
+        if((newSock = accept(nbr.localSock,(struct sockaddr *) &nbr.localAddr, &size))< 0)
+        {                
+                printf("accpeting failed\n");   
+                return -1; 
+        }
+        printf("Neighbor %s has been accpeted\n", nbr.ID);
+        return newSock;
+}
+
+/* */
+int TCPconnect(Neighbor nbr)
+{
+        printf("trying to connect...\n");
+              
+        if(connect(nbr.remoteSock, (struct sockaddr *) &nbr.remoteAddr, sizeof(nbr.remoteAddr)) < 0)
+        {
+                printf("TCPconnect failed connecting\n");
+                return -1; 
+        }
+        printf("connected to neighbor %s\n", nbr.ID);
+    return 0;            
+}
