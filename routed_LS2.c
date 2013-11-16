@@ -28,6 +28,8 @@ int main(int argc, char *argv[])
 	char *init_file;
 	FILE *log_file;
 	
+	int nbytes;
+	
 	// Extract arguments
 	router_id = argv[1];
 	log_filename = argv[2];
@@ -35,6 +37,7 @@ int main(int argc, char *argv[])
 
     Router router;
     router = router_init(*router_id,init_file);
+    //printf("Router init:\n");
     //print_router(router);
     
     
@@ -47,96 +50,228 @@ int main(int argc, char *argv[])
         exit(1);
     }
     
-    /*
+    router = initSock(router);
+    //printf("Router after initSock:\n");
+    //print_router(router);
+    
+    // Initialize LSP of this router
+    LSP_init(&router);
+	print_LSP(&router.self_packet,log_filename);
+	
+	LSP lsp = router.self_packet;
+	// Each router has an array of recently received packets
+	// Receive buffer
+    //LSP buffer_packet;
+    LSP templsp; 
+    //LSP checklsp;
+    
+    char* buffer = malloc(sizeof(LSP));
+    //bzero(buffer,sizeof(buffer));
+    //memcpy(buffer,(char*) &lsp, sizeof(LSP));
+    //memcpy((char*) &checklsp, buffer, sizeof(LSP));
+    //print_LSP(&checklsp, log_file);
+    //printf("router id: %c\nsequence number: %d\n sizeof: %d\n",checklsp.router.ID,checklsp.seq_num, (int) sizeof(lsp));
+    
+    // initialize router routing table
+    routing_table_init(&router);
+    print_routing_table(&router, log_filename);
+    
+    fclose(log_file);
     // ??    
+        int i, j;
     fd_set readSet;
+    fd_set tempReadSet; 
+    
     FD_ZERO(&readSet);
-    int send_socket[router.nbrs_count];
-    int recv_socket[router.nbrs_count];
+    FD_ZERO(&tempReadSet);
     
-    // Create sockets for sending/receiving to/from all direct neighbors
-    int i;    
-    Neighbor n;  
-    for(i=0 ; i<router.nbrs_count ; i++) 
+    //first try to connect to neighbors 
+    for(i = 0; i< router.nbrs_count; i++) 
     {
-		n = router.nbrs[i];
-		//socket[i] = TCPlisten(n.recv_port);
-		send_socket[i] = createTCPsocket(n.send_port);
-		recv_socket[i] = createTCPsocket(n.recv_port);
-		FD_SET(socket[i],&readSet);
-	}
+		if(TCPconnect(router.nbrs[i]) < 0)
+			router.nbrs[i].connectedR = 0;
+		else 
+			router.nbrs[i].connectedR = 1;
+     } 
 	
 	
+     //then listen 
+     for(i = 0; i<  router.nbrs_count; i++) 
+     {
+		 TCPlisten(router.nbrs[i]);
+		 FD_SET(router.nbrs[i].localSock,&readSet);
+      }
     
-    
-    int high_socket;    
-    high_socket = recv_socket[0];
-    for(i=0; i< router.nbrs_count-1 ; i++)
+    int highSock;
+
+    highSock = router.nbrs[0].localSock; 
+    for(i = 0; i < router.nbrs_count-1; i++ )
     {
-		high_socket = recv_socket[i] > recv_socket[i+1]? recv_socket[i]: recv_socket[i+1]; 
+		highSock = router.nbrs[i].localSock > router.nbrs[i+1].localSock? router.nbrs[i].localSock: router.nbrs[i+1].localSock; 
     }
-        
-    for(i=0 ; i<router.nbrs_count ; i++) 
-    {
-		// if connection fails, listen!
-		if(TCPconnect(router.nbrs[i].send_port) < 0)
-			printf("failed to connect"); 
-    } 
-        
-        
-        //int i;
-         
-        //sock[0] = TCPlisten(8080);
-        //sock[1] = TCPlisten(8081);
-         
-        
-        // add ports to the list
-        //FD_SET(sock[0], &readSet); 
-        //FD_SET(sock[1], &readSet); 
-        
-        
-        //if (sock[0] > sock[1]) 
-                //highSock = sock[0]; 
-        //else
-                //highSock = sock[1]; 
+    
+    int counter = 0; 
+    struct timeval tv; 
+    tv.tv_sec = 5;         
+    tv.tv_usec = 0; 
     
     // Select: while router is listening, it waits for one or more neighbors
     // to connect.            
     for(;;)
     {
-		printf("in for\n");                
-		if(select(highSock+1, &readSet, NULL, NULL, NULL) == -1)
-		{
-			perror("Server-select() error lol!");
-			exit(1);
-        }
-        
-        for(i=0; i<router.nbrs_count ; i++) 
+		tv.tv_sec = 5;         
+        tv.tv_usec = 0;
+                        
+        tempReadSet = readSet; 
+        printf("- %d\n", counter);
+                                
+        if(select(highSock+1, &tempReadSet, 0, 0, &tv) < 0) 
         {
-			if(FD_ISSET(sock[i], &readSet))
+			printf("select error!\n");
+		}
+		
+		//CHECK FD
+		for(i = 0; i< router.nbrs_count; i++) 
+		{
+			// for select: Check if there's a connection or not
+            if(FD_ISSET(router.nbrs[i].localSock, &tempReadSet))
             {
-				TCPaccept(sock[i]);        
+				// Accept connections
+				if( router.nbrs[i].connectedS == 0) 
+				{
+					int newSock;
+					if ((newSock = TCPaccept(router.nbrs[i])) > -1)
+					{
+						router.nbrs[i].connectedS= 1;
+						router.nbrs[i].localSock = newSock;
+						
+						printf("sock: %d\n",router.nbrs[i].localSock);
+						printf("connectedS: %d\n",router.nbrs[i].connectedS);
+						
+						FD_SET(router.nbrs[i].localSock,&readSet);
+						if(highSock < newSock)
+							highSock = newSock; 
+					}
+				}
+				
+				// Receive LSPs
+				else
+				{
+					bzero(buffer,sizeof(LSP));
+					socklen_t size = sizeof(&router.nbrs[i].localAddr);
+					
+					if(recvfrom(router.nbrs[i].localSock, buffer, sizeof(LSP), 0, (struct sockaddr *) &router.nbrs[i].localAddr, &size) <0)
+					{
+						printf("error receiving from node %s\n", router.nbrs[i].ID);
+					}
+					else
+					{
+						printf("LSP received from %s \n",router.nbrs[i].ID);
+						memcpy((char *)&templsp, buffer, sizeof(LSP));
+						//print_LSP(&templsp,log_file);
+						
+						// Check if received lsp is new
+						int check_lsp_flag = check_LSP(&router, &templsp);
+						if (check_lsp_flag == 1 || check_lsp_flag == 2)
+						{
+							// Log if LSP caused change in routing table.
+							if(check_lsp_flag == 2)
+							{
+								print_LSP(&templsp, log_filename);
+								print_routing_table(&router,log_filename);
+							}
+							
+							// 2. Flood to all links, except where it came from
+							for(j = 0; j<router.nbrs_count; j++)
+							{
+								if((j != i) && router.nbrs[i].connectedR == 1)
+								{
+									//buffer = malloc(sizeof(LSP));
+									//bzero(buffer, sizeof(LSP));
+									//memcpy(buffer, (char*) &lsp, sizeof(LSP));
+									//memcpy((char *)&templsp, buffer, sizeof(LSP)); 
+									
+									nbytes = sendto(router.nbrs[j].remoteSock, buffer, LSPSIZE, MSG_NOSIGNAL, (struct sockaddr*)&router.nbrs[j].remoteAddr, sizeof(router.nbrs[j].remoteAddr));
+									if (nbytes == -1)
+									{
+										printf("Failed to send on link: %s, %d, %s, %d\n",
+										router.nbrs[i].src_ID, router.nbrs[i].send_port,
+										router.nbrs[i].ID, router.nbrs[i].recv_port);
+									}
+									
+									else
+									{
+										printf("Forward LSP from %s to %s\n", templsp.routerID, router.nbrs[j].ID);
+										//print_LSP(&templsp, log_file);
+									}
+								}
+													
+													
+							}
+																			 
+						}
+					}
+                                
+                                
+                }
             }
-        }
+		}
+                
+            sleep(5);
+                
+            // Try to connect again.        
+            for(i = 0; i< router.nbrs_count; i++) 
+            {
+				if(router.nbrs[i].connectedS == 1 &&router.nbrs[i].connectedR == 0)
+				{
+					if(TCPconnect(router.nbrs[i]) < 0)
+					{
+						printf("failed to connect to %s \n", router.nbrs[i].ID); 
+						router.nbrs[i].connectedR = 0;
+					}
+					else
+						router.nbrs[i].connectedR = 1;
+				}
+			}
+			
+			// initial and periodic flooding: Send LSP to connected links.
+			lsp.seq_num++;
+			for(i = 0; i<router.nbrs_count; i++)
+			{
+				if(router.nbrs[i].connectedR == 1)
+				{
+					buffer = malloc(sizeof(LSP));
+					bzero(buffer, sizeof(LSP));
+					memcpy(buffer, (char*) &lsp, sizeof(LSP));
+					memcpy((char *)&templsp, buffer, sizeof(LSP)); 
+					
+					nbytes = sendto(router.nbrs[i].remoteSock, buffer, sizeof(LSP), 0, (struct sockaddr*)&router.nbrs[i].remoteAddr, sizeof(router.nbrs[i].remoteAddr));
+					if (nbytes == -1)
+					{
+						printf("Failed to send on link: %s, %d, %s, %d\n",
+						router.nbrs[i].src_ID, router.nbrs[i].send_port,
+						router.nbrs[i].ID, router.nbrs[i].recv_port);
+					}
+					
+					else
+					{
+						printf("Send LSP to: %s\n", router.nbrs[i].ID);
+						//print_LSP(&templsp, log_file);
+					}
+				}
+			}
+			
+			counter ++;  
         
-    }*/
+        
+	}
+	fclose(log_file);
+	return 0;      
     
      // Set router timer
-    time_t curr_time;
-    time(&router.timestamp);
+    //time_t curr_time;
+    //time(&router.timestamp);
     
-    // Initialize LSP of this router
-    LSP_init(&router);
-	print_LSP(&router.self_packet,log_file);
-	
-	// Each router has an array of recently received packets
-	LSP received_packets[5];
-	// Receive buffer
-    LSP buffer_packet;
-    
-    // initialize router routing table
-    routing_table_init(&router);
-    print_routing_table(&router, log_file);
     
     // some connection shit
     /*
@@ -214,7 +349,7 @@ int main(int argc, char *argv[])
                          }
                      }
                  }
-                 /*
+                 
                  if(lsp_update_flag == 2)
                  {
 					 // run dijkstra's algorithm
@@ -232,9 +367,8 @@ int main(int argc, char *argv[])
              //}
          //}
 
-     //}
-                
-        return 0; 
+     //}      
+         
         
 // end if
 	
