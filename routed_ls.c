@@ -5,7 +5,7 @@
 
 #include "router_init.h"
 
-#define LSPSIZE 362
+
 
 
 
@@ -22,26 +22,43 @@ int main(int argc, char *argv[])
 	
 	char routerID [sizeof(argv[1])];
 	strcpy(routerID, argv[1]);
+	
 	Router r;
-	r = direct_nbrs_init(*routerID,argv[2]);
 	LSP lsp;
 	LSP templsp; 
 	LSP checklsp;
-	lsp.router = r; 
-	lsp.seq_num = 1; 
+	
+	r = router_init(*routerID,argv[3]);
+	LSP_init(&r);
+	
+	
+	
+	char *log_filename;
+	FILE *log_file;
+	
+	log_filename = argv[2];
+	printf("40\n");	
+
+	log_file = fopen(log_filename, "wb");
+    if (!log_file)
+    {
+        printf("Failed open log file %s for router %s.\n", argv[2], argv[1]);
+        exit(1);
+    }
 	
 	r = initSock(r);
 	print_router(r);
 	
 	int i;
 	int highSock;
-	char* buffer = malloc(sizeof(LSPSIZE));
+	char* buffer = malloc(sizeof(LSP));
 	bzero(buffer,sizeof(buffer));
 	
-	memcpy(buffer,(char*) &lsp, LSPSIZE);
-	memcpy((char*) &checklsp, buffer, LSPSIZE);
-	printf("router id: %c\nsequence number: %d\n sizeof: %d\n",checklsp.router.ID,checklsp.seq_num, (int) sizeof(lsp));
+	memcpy(buffer,(char*) &lsp, sizeof(LSP));
+	memcpy((char*) &checklsp, buffer, sizeof(LSP));
 	
+	printf("sizeof: %d\n",(int)(sizeof(r.self_packet)));
+	print_LSP(&r.self_packet, log_file);
 	
 	fd_set readSet;
 	fd_set tempReadSet; 
@@ -49,14 +66,13 @@ int main(int argc, char *argv[])
 	FD_ZERO(&readSet);
 	FD_ZERO(&tempReadSet);
 
-	int sock[r.nbrs_count];
 	
 	//first try to connect to neighbors 
 	for(i = 0; i< r.nbrs_count; i++) 
 	{
 		bzero(buffer, sizeof(lsp));
 		memcpy(buffer, (char *) &lsp, sizeof(lsp));
-		if(TCPconnect(r.nbrs[i], buffer) < 0)
+		if(TCPconnect(r.nbrs[i]) < 0)
 			r.nbrs[i].connectedR = 0;
 		else 
 			r.nbrs[i].connectedR = 1;
@@ -105,7 +121,7 @@ int main(int argc, char *argv[])
 				if( r.nbrs[i].connectedS == 0) 
 				{	
 					int newSock;
-					if ((newSock = TCPaccept(r.nbrs[i], buffer)) > -1)
+					if ((newSock = TCPaccept(r.nbrs[i])) > -1)
 					{
 						r.nbrs[i].connectedS= 1;
 						r.nbrs[i].localSock = newSock;
@@ -122,7 +138,7 @@ int main(int argc, char *argv[])
 				
 				else
 				{	
-					
+					// receiving LSP
 					bzero(buffer,LSPSIZE);
 					int size = sizeof(&r.nbrs[i].localAddr);
 					
@@ -130,11 +146,31 @@ int main(int argc, char *argv[])
 					{
 						printf("error receiving\n");
 					}
+					
+					//Forwarding LSP on all ports except the port it was received on 
 					else
 					{	
-						printf("file received from %c \n",r.nbrs[i].ID);
 						memcpy((char *)&templsp, buffer, LSPSIZE);
-						printf("router id: %c\nsequence number: %d\n",templsp.router.ID,templsp.seq_num);
+						printf("file received from %s through %s\n",templsp.routerID,r.nbrs[i].ID);
+						print_LSP(&templsp, log_file);
+						
+						int j; 
+						
+						for(j = 0; j< r.nbrs_count ; j++)
+						{
+							
+							if((j != i) && (r.nbrs[j].connectedR == 1)) 
+							{
+								
+								if(sendto(r.nbrs[j].remoteSock, buffer, LSPSIZE, 0, (struct sockaddr*)&r.nbrs[i].remoteAddr, sizeof(r.nbrs[j].remoteAddr)) < 0)
+									printf("send failed sending\n");
+		
+								printf("from %s to %s\n", r.nbrs[i].ID, r.nbrs[j].ID);							
+							
+							
+							}
+						}
+						
 					}
 				}
 				
@@ -154,9 +190,9 @@ int main(int argc, char *argv[])
 			{
 				bzero(buffer,sizeof(LSPSIZE));
 				memcpy(buffer,(char*)&lsp, LSPSIZE);
-				if(TCPconnect(r.nbrs[i],buffer) < 0)
+				if(TCPconnect(r.nbrs[i]) < 0)
 				{
-					printf("failed to connect to %c \n", r.nbrs[i].ID); 
+					printf("failed to connect to %s \n", r.nbrs[i].ID); 
 					r.nbrs[i].connectedR = 0;
 				}
 				else
@@ -166,24 +202,26 @@ int main(int argc, char *argv[])
 		}
 		
 		lsp.seq_num++;
+		if( counter == 0 || (counter%5 == 0))
+		{
 		for(i = 0; i<r.nbrs_count; i++)
 		{
 			if(r.nbrs[i].connectedR == 1) 
 			{
 				buffer = malloc(LSPSIZE);
 				bzero(buffer, LSPSIZE);
-				memcpy(buffer, (char*) &lsp, LSPSIZE);
+				memcpy(buffer, (char*) &r.self_packet, LSPSIZE);
 				memcpy((char *)&templsp, buffer, LSPSIZE); 
 		
 				if(sendto(r.nbrs[i].remoteSock, buffer, LSPSIZE, 0, (struct sockaddr*)&r.nbrs[i].remoteAddr, sizeof(r.nbrs[i].remoteAddr)) < 0)
 					printf("send failed sending\n");
 		
-				printf("sent LSP number %d to %c\n",templsp.seq_num,r.nbrs[i].ID);
+				printf("sent LSP to %s\n", r.nbrs[i].ID);
 			}
 			
 			
 		}
-		
+		}
 		counter ++;
 		
 	}	
